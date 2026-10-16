@@ -62,7 +62,7 @@ def test_provider_error_is_safe(monkeypatch):
         def history(self, **kwargs): raise RuntimeError('private detail')
     monkeypatch.setattr('data.yf.Ticker', Broken)
     stock = load_stock('BAD')
-    assert stock.metrics == {} and len(stock.warnings) == 2
+    assert stock.metrics == {} and len(stock.warnings) >= 3
     assert 'private detail' not in str(stock)
 
 

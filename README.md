@@ -23,7 +23,7 @@ Voliteľne zvoľte **Alpha Vantage** pre fundamenty. Vytvorte si kľúč na http
 ALPHAVANTAGE_API_KEY = "SEM_PATRÍ_VÁŠ_KĽÚČ"
 ```
 
-Skutočný kľúč nikdy necommitujte. Aplikácia ho nežiada vo webovom formulári, nezobrazuje ani neloguje. Cache je serverová, spoločná pre relácie, s platnosťou 30 minút; kľúč je súčasťou jej hashovaného identifikátora. Používajte kľúč správcu nasadenia. Pri chybe API sa nezobrazuje surová odpoveď ani URL s kľúčom.
+Skutočný kľúč nikdy necommitujte. Aplikácia ho nežiada vo webovom formulári, nezobrazuje ani neloguje. Cache je serverová, spoločná pre relácie, s platnosťou 5 minút; kľúč je súčasťou jej hashovaného identifikátora. Používajte kľúč správcu nasadenia. Pri chybe API sa nezobrazuje surová odpoveď ani URL s kľúčom.
 
 Alpha Vantage má podľa plánu prísne limity a odlišné symboly; OVERVIEW nemusí podporovať požadovanú európsku akciu. Poskytuje iba časť fundamentov. FCF, ROIC a ďalšie nepodporované ukazovatele zostávajú N/A; aplikácia ich potichu nemieša s druhým poskytovateľom. Cenový graf pochádza z Yahoo Finance. Pri neúplných dátach nemusí existovať celkové skóre.
 
@@ -63,3 +63,18 @@ Testy pokrývajú skórovanie, chýbajúce hodnoty, záporné násobky a vlastn�
 5. Spustite analýzu tickera a skontrolujte zdroj, upozornenia, pokrytie a graf. Limity API alebo blokovanie Yahoo sa môžu líšiť od lokálneho prostredia.
 
 Nastavenie témy a bezobslužného servera je v `.streamlit/config.toml`. Nepotrebujete databázu ani ďalšiu službu. Nasadenie vyžaduje prístup k vášmu GitHubu a účtu Streamlit; samotné vytvorenie súborov aplikáciu nepublikuje.
+
+
+## Diagnostika načítania a bezplatná záloha SEC EDGAR
+
+Predvolená cesta je Yahoo Finance cez aktualizovaný yfinance 1.7.0. Chyba fundamentov sama osebe neznamená chybný ticker: COHR je symbol Coherent Corp. na NYSE, SAP.DE je Yahoo symbol pre Frankfurt a ASML.AS pre Amsterdam. Symboly sa automaticky neprepisujú na inú burzu. Triedy US akcií (napr. BRK.B) sa iba pri hľadaní v SEC normalizujú na BRK-B. Yahoo suffixy nie sú univerzálne symboly pre ostatné API.
+
+Aplikácia rozlišuje proxy/sieťové blokovanie, HTTP 429, HTTP 401/403, HTTP 404, timeout, TLS a neúplnú odpoveď. Ak yfinance chybu interne potlačí a vráti iba prázdnu odpoveď, aplikácia nedokáže spätne určiť HTTP stav a uvedie neúplnú odpoveď. Neoznačuje firmu za neexistujúcu iba preto, že poskytovateľ zlyhal. Nezobrazuje surové výnimky, URL s kľúčmi ani obsah chybovej odpovede.
+
+Pri chýbajúcich Yahoo fundamentoch sa automaticky skúsi **SEC EDGAR**, oficiálny zdroj bez API kľúča: register tickerov a Company Facts. SEC nezávisle overí ticker a CIK, potom doplní iba chýbajúce údaje. Podporované sú ročné US-GAAP údaje v USD z 10-K/10-K/A: EPS, marže, rast ročných tržieb/zisku, FCF (prevádzkový cash flow − kapitálové výdavky) a bežná likvidita. Výpočty vyžadujú zladené obdobia; chýbajúce položky nenahrádza nula. Pri nekladnom minuloročnom zisku sa percentuálny rast zisku nevypočíta. Aktuálna cena, P/E, forward P/E, PEG, dlh/vlastné imanie a ROIC zo SEC sa nedopočítavajú. Záloha nie je garantovaným zdrojom pre európske firmy ani IFRS/20-F.
+
+**Ročné údaje SEC nie sú TTM ani odhady.** Pri každom použitom údaji je v detaile jeho zdroj a pri SEC aj koniec obdobia. Existujúce údaje Yahoo sa neprepisujú; ak Yahoo uvádza inú menu výkazov než USD, SEC USD údaje sa nemiešajú. Výsledné skóre môže obsahovať odlišné obdobia, na čo aplikácia upozorňuje. Pri výpadku oboch zdrojov zostáva N/A aj s dôvodom. Cache má platnosť 5 minút, aby dočasný výpadok nezostal pol hodiny; možno ju ručne vymazať.
+
+SEC vyžaduje identifikovaný User-Agent podľa https://www.sec.gov/about/developer-resources. Voliteľne nastavte **SEC_USER_AGENT** napríklad na názov aplikácie a kontaktný e-mail prevádzkovateľa, iba v prostredí v prostredí. Nejde o API kľúč. Bez nastavenia sa používa názov aplikácie a verejná adresa projektu. SEC môže automatické požiadavky aj napriek tomu obmedziť. Požiadavky sú na proces serializované, začínajú najviac 4-krát za sekundu. HTTP 429/5xx sa opakuje maximálne raz pri krátkom Retry-After, bez nekonečného skúšania; dlhý Retry-After sa neobchádza.
+
+V sieťovej politike povoľte navyše **www.sec.gov** a **data.sec.gov**. Na Streamlit Community Cloud povoľte odchádzajúce HTTPS, aktualizujte závislosti/reštartujte aplikáciu a skúste COHR; zobrazte detail zdrojov a diagnostiku. Lokálne overenie v spravovanom cloude narazilo na proxy 403 pre Yahoo aj SEC. To nie je dôkaz, že COHR nie je platný, ani potvrdenie rovnakého problému na vašom Streamlit hostingu. Automatické testy používajú výhradne označené syntetické odpovede; živú dostupnosť SEC v blokovanom prostredí nemožno potvrdiť.

@@ -45,6 +45,7 @@ class Stock:
     source: str = 'Yahoo Finance'
     fetched: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     fiscal_date: str = 'N/A'
+    provenance: dict = field(default_factory=dict)
 
 
 def ramp(value, low, high, reverse=False):

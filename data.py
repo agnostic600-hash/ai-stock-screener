@@ -2,7 +2,9 @@
 import requests
 import pandas as pd
 import yfinance as yf
-from screener import Stock, number
+from screener import Stock, number, METRICS
+from providers import error_reason, DataError
+from secdata import load_sec
 
 
 def statement_value(frame, row, column):
@@ -42,8 +44,10 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
     if provider == 'Yahoo Finance':
         try:
             info = asset.get_info()
-            if not info or not any(info.get(k) is not None for k in ('regularMarketPrice', 'currentPrice', 'longName')):
-                stock.warnings.append('Fundamentálne údaje nie sú dostupné; overte ticker.')
+            if not isinstance(info, dict):
+                raise DataError('Neplatná odpoveď Yahoo Finance.')
+            if not any(number(info.get(k)) is not None for k in ('trailingPE', 'trailingEps', 'totalRevenue', 'freeCashflow')):
+                stock.warnings.append('Yahoo vrátilo iba čiastočnú odpoveď bez základných fundamentov; neznamená to neplatný ticker.')
             stock.name = info.get('longName') or info.get('shortName') or symbol
             stock.currency = info.get('currency', '')
             stock.financial_currency = info.get('financialCurrency', '')
@@ -56,10 +60,33 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
                 stock.metrics['debt_equity'] /= 100
             try:
                 stock.metrics['roic'], stock.fiscal_date = compute_roic(asset.income_stmt, asset.balance_sheet)
+            except Exception as exc:
+                stock.warnings.append('ROIC je N/A: ' + error_reason(exc))
+        except Exception as exc:
+            stock.warnings.append('Yahoo Finance – fundamenty: ' + error_reason(exc))
+        stock.provenance = {k: 'Yahoo Finance (obdobie podľa poskytovateľa)' for k,v in stock.metrics.items() if v is not None}
+        # SEC je nezávislá bezplatná záloha pre chýbajúce historické fundamenty.
+        supported = ('eps','revenue_growth','earnings_growth','gross_margin','operating_margin','profit_margin','fcf','current_ratio')
+        if any(stock.metrics.get(k) is None for k in supported):
+            try:
+                name, metrics, fiscal_date = load_sec(symbol)
+                if stock.financial_currency and stock.financial_currency != 'USD':
+                    raise DataError('Mena výkazov Yahoo nie je USD; SEC USD údaje sa kvôli neporovnateľnosti nemiešajú.')
+                added = []
+                for k,v in metrics.items():
+                    if stock.metrics.get(k) is None and v is not None:
+                        stock.metrics[k] = v
+                        stock.provenance[k] = 'SEC EDGAR – ročné obdobie do ' + fiscal_date
+                        added.append(k)
+                if added:
+                    stock.name = stock.name or name
+                    stock.financial_currency = stock.financial_currency or 'USD'
+                    stock.source += ' + SEC EDGAR (ročná záloha)'
+                    stock.warnings.append('SEC overilo ticker a doplnilo ročné údaje: ' + ', '.join(METRICS[k] for k in added) + '. Nie sú to TTM ani analytické odhady; podrobné obdobia sú v detaile.')
+            except DataError as exc:
+                stock.warnings.append('Záloha SEC EDGAR: ' + str(exc))
             except Exception:
-                stock.warnings.append('Ročné výkazy pre ROIC nie sú dostupné.')
-        except Exception:
-            stock.warnings.append('Yahoo Finance neposkytlo fundamenty. Skontrolujte sieť, ticker alebo limit API.')
+                stock.warnings.append('Záloha SEC EDGAR: odpoveď má nepodporovaný formát; údaje zostávajú N/A.')
     else:
         stock.source = 'Alpha Vantage (fundamenty), Yahoo Finance (graf)'
         if not api_key:
@@ -70,21 +97,24 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
                 response.raise_for_status()
                 info = response.json()
                 if not info.get('Symbol'):
-                    stock.warnings.append('Alpha Vantage nevrátilo firmu: neplatný ticker, limit API alebo nedostupné pokrytie.')
+                    stock.warnings.append(('Alpha Vantage: limit API alebo servisné oznámenie; skúste neskôr.' if info.get('Note') or info.get('Information') else 'Alpha Vantage: ticker nemá dostupné údaje alebo bol odmietnutý; overte symbol a pokrytie.'))
                 stock.name = info.get('Name', symbol)
                 stock.currency = stock.financial_currency = info.get('Currency', '')
                 stock.sector = info.get('Sector') or 'N/A'
                 stock.fiscal_date = info.get('LatestQuarter') or 'N/A'
                 mapping = {'pe':'PERatio','forward_pe':'ForwardPE','peg':'PEGRatio','revenue_growth':'QuarterlyRevenueGrowthYOY','eps':'EPS','earnings_growth':'QuarterlyEarningsGrowthYOY','operating_margin':'OperatingMarginTTM','profit_margin':'ProfitMargin'}
                 stock.metrics = {k:number(info.get(v)) for k,v in mapping.items()}
-            except (requests.RequestException, ValueError):
-                stock.warnings.append('Alpha Vantage je nedostupné. Overte prístup k API a jeho limity.')
+            except (requests.RequestException, ValueError) as exc:
+                stock.warnings.append('Alpha Vantage: ' + error_reason(exc))
     try:
         history = asset.history(period='1y', auto_adjust=True, timeout=15)
         if not history.empty:
             stock.history = history['Close'].rename(symbol)
         else:
             stock.warnings.append('Cenová história nie je dostupná.')
-    except Exception:
-        stock.warnings.append('Cenová história nie je dostupná.')
+    except Exception as exc:
+        stock.warnings.append('Cenová história je N/A: ' + error_reason(exc))
+    missing = [label for k,label in METRICS.items() if stock.metrics.get(k) is None]
+    if missing:
+        stock.warnings.append('N/A – zdroje neposkytli použiteľné údaje: ' + ', '.join(missing) + '. Podrobnosti o prístupe a pokrytí sú vyššie; chýbajúce odhady ani ceny sa nedopočítavajú.')
     return stock

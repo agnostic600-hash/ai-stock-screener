@@ -21,7 +21,7 @@ def secret_key():
         return ''
 
 
-@st.cache_data(ttl=1800, max_entries=100, show_spinner=False)
+@st.cache_data(ttl=300, max_entries=100, show_spinner=False)
 def cached_stock(symbol, provider, api_key):
     return load_stock(symbol, api_key, provider)
 
@@ -126,6 +126,8 @@ else:
         st.write(f'**{s.name or s.ticker}** • {s.sector}')
         st.caption(f'Zdroj: {s.source} • Načítané (UTC): {s.fetched} • Dátum výkazov/obdobia: {s.fiscal_date}')
         st.write('Mena ceny: **'+(s.currency or 'N/A')+'**; mena finančných výkazov a EPS: **'+(s.financial_currency or 'N/A')+'**. Čiastky FCF sú v základných jednotkách meny výkazov.')
+        if s.provenance:
+            st.dataframe(pd.DataFrame([{'Ukazovateľ': METRICS.get(k,k), 'Zdroj a obdobie': v} for k,v in s.provenance.items()]), hide_index=True)
         st.subheader('Podmienený výhľad na 3 až 5 rokov')
         st.write('Scenár mechanicky zachováva posledný dostupný medziročný rast zisku a násobí ním dnešné EPS. Nie je to prognóza ceny ani odhad budúceho výnosu. Rast sa môže výrazne zmeniť.')
         projections = [{'Horizont':f'{year} rokov', 'Scenárové EPS':scenario(s, year)} for year in (3,4,5)]
@@ -146,5 +148,5 @@ V každej oblasti sa priemerujú iba dostupné indikátory. Celkové skóre je r
 
 Yahoo udáva dlh/vlastné imanie v percentách; aplikácia ho mení na pomer. Záporné vlastné imanie nie je známkou stability: nekladný pomer dlhu sa pri záporných hodnotách zo skórovania vylučuje. Banky, poisťovne a REIT vyžadujú odlišné modely. Absolútny FCF neporovnávajte medzi menami alebo rôzne veľkými firmami.
 
-Alpha Vantage OVERVIEW neposkytuje všetky požadované ukazovatele; neznáme marže, FCF, zadlženie a ROIC zostávajú N/A. Európske pokrytie a symboly závisia od poskytovateľa. Pri limite alebo chybe API aplikácia zobrazí upozornenie. Údaje sa ukladajú do vyrovnávacej pamäte na 30 minút. API kľúč sa nezobrazuje ani nezapisuje do repozitára.
+Alpha Vantage OVERVIEW neposkytuje všetky požadované ukazovatele; neznáme marže, FCF, zadlženie a ROIC zostávajú N/A. Európske pokrytie a symboly závisia od poskytovateľa. Pri limite alebo chybe API aplikácia zobrazí upozornenie. Údaje sa ukladajú do vyrovnávacej pamäte na 5 minút. API kľúč sa nezobrazuje ani nezapisuje do repozitára.
 ''')

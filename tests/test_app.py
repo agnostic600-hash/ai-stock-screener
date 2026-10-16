@@ -48,3 +48,19 @@ def test_invalid_ticker_shows_error():
     app.button[0].click().run()
     assert not app.exception
     assert app.error
+
+
+def test_fallback_results_are_visible_in_ui(monkeypatch):
+    class Asset:
+        def get_info(self): raise type('YFRateLimitError',(Exception,),{})()
+        def history(self,**kw): return pd.DataFrame()
+    monkeypatch.setattr('data.yf.Ticker',lambda symbol:Asset())
+    monkeypatch.setattr('data.load_sec',lambda symbol:('Testovacia firma',{'eps':2},'2025-06-30'))
+    app=AppTest.from_file(str(Path(__file__).resolve().parents[1] / 'app.py'), default_timeout=15).run()
+    app.text_area[0].set_value('FALLBACK')
+    app.button[0].click().run()
+    assert not app.exception
+    assert app.dataframe[0].value.iloc[0]['EPS']==2
+    assert any('SEC' in w.value for w in app.warning)
+    assert any('429' in w.value for w in app.warning)
+    assert any('2025-06-30' in str(table.value) for table in app.dataframe)
