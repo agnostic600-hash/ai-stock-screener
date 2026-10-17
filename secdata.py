@@ -123,6 +123,7 @@ def parse_facts(payload):
     bundle=annual_bundle(rev,metrics['fcf'],val(['GrossProfit']),ebit,
         val(['CashAndCashEquivalentsAtCarryingValue'], instant=True),debt,ebitda,current_shares,previous_shares,prior_revenue,due)
     metrics['_resilience'] = bundle
+    metrics['_published_at'] = revenue.get('filed','')
     return metrics, end
 
 
@@ -138,4 +139,5 @@ def load_sec(symbol):
     if str(payload.get('cik','')).lstrip('0') != cik.lstrip('0'):
         raise DataError('SEC vrátilo inú identitu firmy; údaje boli odmietnuté.')
     metrics, end = parse_facts(payload)
+    metrics['_cik'] = cik
     return company.get('title',symbol), metrics, end

@@ -92,10 +92,13 @@ def test_selection_ignores_financial_availability():
     assert [r['symbol'] for r in candidates(first)]==[r['symbol'] for r in candidates(second)]
 
 
-def test_old_financial_snapshots_are_not_ranked_as_current():
+def test_valid_fundamentals_do_not_expire_after_48_hours():
     from discovery import analyze,top20
     from datetime import datetime,timedelta,timezone
     row=analyze(stock(),listing())
+    row['annual_period']=(datetime.now(timezone.utc)-timedelta(days=100)).date().isoformat()
     row['fetched_at']=(datetime.now(timezone.utc)-timedelta(hours=49)).isoformat()
     assert row['score'] is not None  # Historical eligibility remains auditable.
+    assert len(top20([row]))==1
+    row['fundamental_valid_until']=(datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat()
     assert top20([row])==[]

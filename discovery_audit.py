@@ -5,18 +5,20 @@ from datetime import datetime,timezone
 
 
 def has_financials(row):
+    if 'has_financial_inputs' in row:return row['has_financial_inputs']
     return row['identity_verified'] and any(row.get(k) is not None for k in ('growth','forward_pe','fcf_margin','net_debt_ebitda'))
 
 
-def recent(row,now=None,hours=48):
-    try:
-        fetched=datetime.fromisoformat(row['fetched_at'])
-        if fetched.tzinfo is None:return False
-        age=((now or datetime.now(timezone.utc))-fetched).total_seconds()
-        annual=datetime.fromisoformat(row['annual_period']).date()
-        annual_age=((now or datetime.now(timezone.utc)).date()-annual).days
-        return 0<=age<=hours*3600 and 0<=annual_age<=550
-    except (ValueError,TypeError,KeyError):return False
+def recent(row,now=None,hours=None):
+    """Fundamental validity and separately dated market valuation, not 48h age."""
+    from market_store import parsed,fundamental_status
+    now=now or datetime.now(timezone.utc)
+    metadata={'retrieved_at':row.get('fetched_at'),'period_end':row.get('annual_period'),'valid_until':row.get('fundamental_valid_until'),'identity_verified':row.get('identity_verified'),'report_pending':row.get('report_pending',False)}
+    if not fundamental_status(metadata,now)[0]:return False
+    for key in ('price_asof','valuation_asof'):
+        timestamp=parsed(row.get(key))
+        if not timestamp or not -3600<=(now-timestamp).total_seconds()<=7*86400:return False
+    return True
 
 
 def audit(rows,listings=()):
@@ -32,7 +34,7 @@ def audit(rows,listings=()):
             n=len(subset);ranked=sum(r['score'] is not None for r in subset)
             pop=sum(r['exchange']==value for r in listings) if field=='exchange' else None
             groups.append({'dimension':field,'group':value,'universe':pop,'attempted':n,'analyzed':sum(has_financials(r) for r in subset),'ranked':ranked,'rank_rate':ranked/n if n else None,'sample_share':n/len(rows) if rows else None,'universe_share':pop/len(listings) if pop is not None and listings else None})
-    return {'attempted':len(rows),'analyzed':len(analyzed),'ranked_at_fetch':sum(r['score'] is not None for r in rows),'excluded_analyzed':len(excluded),'without_financials':len(rows)-len(analyzed),'overlapping_reasons':dict(reasons),'primary_reasons':dict(primary),'groups':groups}
+    return {'covered_fundamentals':sum(r.get('fundamental_valid') is True for r in rows),'comparable':sum(r['score'] is not None and recent(r) for r in rows),'attempted':len(rows),'analyzed':len(analyzed),'ranked_at_fetch':sum(r['score'] is not None for r in rows),'excluded_analyzed':len(excluded),'without_financials':len(rows)-len(analyzed),'overlapping_reasons':dict(reasons),'primary_reasons':dict(primary),'groups':groups}
 
 
 def coverage_estimate(total,done=0,daily_budget=100):

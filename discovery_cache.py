@@ -1,5 +1,6 @@
 """JSON-only SQLite cache, reusable across UI sessions. No pickle or credentials."""
 import json
+import os
 import math
 import sqlite3
 import time
@@ -9,11 +10,19 @@ import pandas as pd
 from screener import Stock
 
 class Cache:
-    def __init__(self,path):
-        self.path=Path(path);self.path.parent.mkdir(parents=True,exist_ok=True)
+    def __init__(self,path,database_url=None):
+        self.database_url=database_url or os.getenv('DISCOVERY_DATABASE_URL')
+        self.path=Path(path)
+        if not self.database_url:self.path.parent.mkdir(parents=True,exist_ok=True)
         with self.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires REAL NOT NULL)')
-    def connect(self):return sqlite3.connect(self.path,timeout=15)
+    def connect(self):
+        if self.database_url:
+            from storage_postgres import PostgresConnection
+            return PostgresConnection(self.database_url)
+        return sqlite3.connect(self.path,timeout=15)
+    @property
+    def storage_kind(self):return 'external-postgresql' if self.database_url else 'local-sqlite'
     def get(self,key,now=None):
         now=time.time() if now is None else now
         with self.connect() as db:row=db.execute('SELECT value, expires FROM cache WHERE key=?',(key,)).fetchone()
@@ -23,7 +32,7 @@ class Cache:
     def put(self,key,value,ttl,now=None):
         now=time.time() if now is None else now
         text=json.dumps(value,allow_nan=False)
-        with self.connect() as db:db.execute('INSERT OR REPLACE INTO cache VALUES (?,?,?)',(key,text,now+ttl))
+        with self.connect() as db:db.execute('INSERT INTO cache(key,value,expires) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,expires=excluded.expires',(key,text,now+ttl))
 
 
 def pack(stock):

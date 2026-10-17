@@ -19,6 +19,7 @@ def test_discovery_view_does_not_load_network_on_render(monkeypatch,tmp_path):
 
 def test_discovery_batch_ui_and_single_stock_mode_preserved(monkeypatch,tmp_path):
     cache=Cache(tmp_path/'cache.sqlite')
+    monkeypatch.setattr('discovery_ui.check_filings',lambda store:{'date':'fixture'})
     monkeypatch.setattr('discovery_ui.Cache',lambda path:cache)
     monkeypatch.setattr('discovery_ui.universe',lambda c:({'listings':[listing('AAA'),listing('BBB')],'fetched_at':'2026-10-17T00:00:00+00:00','file_times':{'test':'fixture'}},False))
     monkeypatch.setattr('discovery_ui.scan_campaign',lambda campaigns,ident,limit,progress:scan_campaign(campaigns,ident,limit,progress,scanner=lambda listings,cache,limit:scan(listings,cache,limit,loader=stock,min_interval=0)))
@@ -38,6 +39,7 @@ def test_discovery_batch_ui_and_single_stock_mode_preserved(monkeypatch,tmp_path
 
 def test_resume_after_new_apptest_session_and_denominator_caption(monkeypatch,tmp_path):
     cache=Cache(tmp_path/'cache.sqlite')
+    monkeypatch.setattr('discovery_ui.check_filings',lambda store:{'date':'fixture'})
     from discovery_campaign import Campaigns
     from discovery import analyze
     campaigns=Campaigns(cache)

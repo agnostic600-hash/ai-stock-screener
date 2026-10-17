@@ -1,5 +1,7 @@
 # Market Discovery MVP — validation 2026-10-17
 
+Historical evidence. The later `STORAGE_AND_FRESHNESS.md` supersedes the combined cache / 48h fundamental expiry architecture described below.
+
 Historical initial-MVP baseline. The later representativeness review replaces browser/cycle offsets with durable whole-universe traversal, adds coverage diagnostics and a 48h current-ranking window. See `REPRESENTATIVENESS_REVIEW.md` for current behavior and additional test evidence.
 
 ## Automated contracts (not live financial facts)

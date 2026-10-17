@@ -14,9 +14,9 @@ def listing(symbol='UNIT'):
 
 
 def stock(symbol='UNIT'):
-    return Stock(symbol,identity_verified=True,name='Test',currency='USD',resilience_period=datetime.now(timezone.utc).date().isoformat(),
+    return Stock(symbol,identity_verified=True,name='Test',currency='USD',financial_currency='USD',metrics={'price':100},resilience_period=datetime.now(timezone.utc).date().isoformat(),
         resilience_inputs=dict(fcf_margin=.2,net_debt_ebitda=0,revenue_growth=.2,operating_margin=.2,forward_pe=5,share_dilution=0,ai_capex_exposure=None),
-        profile={'industry':'Semiconductor equipment','longBusinessSummary':'industrial automation robotics','quoteType':'EQUITY'})
+        profile={'forwardEps':20,'regularMarketTime':datetime.now(timezone.utc).timestamp(),'industry':'Semiconductor equipment','longBusinessSummary':'industrial automation robotics','quoteType':'EQUITY'})
 
 
 def test_directory_excludes_etf_tests_and_unsupported_names():

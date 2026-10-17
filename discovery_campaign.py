@@ -44,8 +44,27 @@ class Campaigns:
             changed=db.execute("UPDATE campaign_items SET state='done',result=?,lease=NULL WHERE campaign=? AND symbol=? AND owner=? AND state='running'",(json.dumps(row,allow_nan=False),ident,claim['symbol'],claim['owner'])).rowcount
         if changed!=1:raise ValueError('Rezervácia expirovala alebo bola spracovaná iným pracovníkom.')
     def rows(self,ident):
-        with self.cache.connect() as db:rows=db.execute("SELECT result FROM campaign_items WHERE campaign=? AND state='done' ORDER BY ordinal",(ident,)).fetchall()
-        return [json.loads(r[0]) for r in rows]
+        # Rejoin permanent fundamentals and independent prices; campaign rows are audit history.
+        from market_store import MarketStore
+        from discovery_cache import unpack
+        from discovery import analyze
+        store=MarketStore(self.cache);catalog=store.catalog()
+        with self.cache.connect() as db:rows=db.execute("SELECT result,listing FROM campaign_items WHERE campaign=? AND state='done' ORDER BY ordinal",(ident,)).fetchall()
+        result=[]
+        for text,listing in rows:
+            historical=json.loads(text);symbol=historical['symbol']
+            fundamental,meta=catalog.get(('fundamentals',symbol),(None,{}))
+            if fundamental is None:
+                legacy=self.cache.get('stock:v1:'+symbol)
+                if legacy is not None and store.save_fundamentals(unpack(legacy)):
+                    fundamental,meta=store.get('fundamentals',symbol)
+                    catalog[('prices',symbol)]=store.get('prices',symbol)
+            if fundamental is not None:
+                prices,pmeta=catalog.get(('prices',symbol),(None,{}))
+                row=analyze(fundamental,json.loads(listing),meta,prices,pmeta or None)
+                row['historical_score']=historical.get('score');result.append(row)
+            else:result.append(historical)
+        return result
     def counts(self,ident):
         with self.cache.connect() as db:rows=db.execute('SELECT state,count(*) FROM campaign_items WHERE campaign=? GROUP BY state',(ident,)).fetchall()
         counts={'pending':0,'running':0,'done':0};counts.update(dict(rows));counts['total']=sum(counts.values())

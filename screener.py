@@ -53,6 +53,10 @@ class Stock:
     resilience_currency: str = ''
     profile: dict = field(default_factory=dict)
     identity_verified: bool = False
+    financial_published_at: str = ''
+    next_report_at: str = ''
+    known_report_at: str = ''
+    sec_cik: str = ''
 
 
 def ramp(value, low, high, reverse=False):

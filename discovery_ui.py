@@ -5,7 +5,12 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 from discovery_cache import Cache
-from discovery import universe, top20, ranked_rows
+from discovery import universe, top20, ranked_rows, scan
+from market_store import MarketStore
+from market_refresh import refresh_prices,due_fundamentals
+from filing_events import check_filings
+from storage_config import database_url
+from storage_postgres import StorageError
 from discovery_campaign import Campaigns, scan_campaign
 from discovery_audit import audit, coverage_estimate
 from providers import DataError
@@ -16,12 +21,14 @@ def render_discovery():
     st.caption('Reálne zdroje: NASDAQ Trader → Yahoo Finance + SEC EDGAR. TOP 20 je iba zo spracovanej vzorky, nie z celého trhu. Žiadne simulované výsledky.')
     st.info('Výber je stabilné SHA-256 poradie tickerov, nezávislé od investičných metrík. Trvalý priechod celého univerza pokračuje aj po reštarte relácie. Dávka najviac 100; nový úplný priechod je možný až po pokuse o každý symbol.')
     try:
-        cache=Cache(Path(os.getenv('DISCOVERY_CACHE_PATH','.cache/discovery.sqlite3')))
+        path=Path(os.getenv('DISCOVERY_CACHE_PATH','.cache/discovery.sqlite3'))
+        url=database_url()
+        cache=Cache(path,database_url=url) if url else Cache(path)
         campaigns=Campaigns(cache)
         current=campaigns.current()
-    except (OSError,sqlite3.Error) as exc:
+    except (OSError,sqlite3.Error,StorageError) as exc:
         st.error('Úložisko priechodu nie je dostupné: '+str(exc));return
-    st.caption('Postup je uložený mimo relácie prehliadača. Hosting musí mať trvalý disk; po strate alebo vymazaní serverového úložiska sa história priechodu nezachová.')
+    st.caption('Úložisko: '+cache.storage_kind+'. PostgreSQL vyžaduje potvrdenú externú trvalú službu; samotný connection string nie je dôkaz perzistencie. Lokálne SQLite potrebuje trvalý disk. Lokálny disk nie je záruka prežitia redeployu. Externá DB sa musí nakonfigurovať a otestovať, nejde o automaticky zriadenú službu.')
     size=st.select_slider('Veľkosť ďalšej dávky',options=[5,10,20,50,100],value=10,key='discovery_batch')
     if st.button('Vyhľadať príležitosti / ďalšia dávka',type='primary',key='discovery_run'):
         try:
@@ -29,12 +36,14 @@ def render_discovery():
                 listing,hit=universe(cache)
                 campaigns.start(listing)
                 current=campaigns.current()
+            try:check_filings(MarketStore(cache))
+            except DataError as exc:st.warning('Kontrola nových podaní nebola dostupná: '+str(exc))
             bar=st.progress(0,text='Pokračujem v trvalom priechode…')
             with st.spinner('Načítavam reálne dáta; prvá dávka môže trvať niekoľko minút…'):
                 result=scan_campaign(campaigns,current['id'],size,
                     progress=lambda n,total:bar.progress(n/total,text=f'Spracované {n}/{total} v tejto dávke'))
             st.session_state['discovery_last']=result
-        except (DataError,OSError,ValueError,sqlite3.Error) as exc:st.error('Discovery sa nepodarilo dokončiť: '+str(exc))
+        except (DataError,OSError,ValueError,sqlite3.Error,StorageError) as exc:st.error('Discovery sa nepodarilo dokončiť: '+str(exc))
     if st.button('Nový úplný priechod (iba po dokončení univerza)',key='discovery_reset'):
         if current and campaigns.counts(current['id'])['done']<campaigns.counts(current['id'])['total']:
             st.warning('Priechod ešte nie je hotový. Ďalšia dávka pokračuje bez opakovania dokončených symbolov.')
@@ -44,10 +53,29 @@ def render_discovery():
                 campaigns.start(listing,new=True)
                 st.session_state.pop('discovery_last',None)
                 current=campaigns.current()
-            except (DataError,OSError,ValueError,sqlite3.Error) as exc:st.error(str(exc))
+            except (DataError,OSError,ValueError,sqlite3.Error,StorageError) as exc:st.error(str(exc))
     if current is None:
         st.write('Spustite dávku. Bez úspešného načítania zdrojov nezobrazujeme žiadne výsledky.');return
     listings=current['universe']
+    store=MarketStore(cache)
+    covered_symbols={r['symbol'] for r in campaigns.rows(current['id'])}
+    covered_listings=[r for r in listings['listings'] if r['symbol'] in covered_symbols]
+    c1,c2,c3=st.columns(3)
+    if c1.button('Obnoviť ceny a techniku',key='refresh_prices'):
+        with st.spinner('Samostatná cenová dávka bez opätovného sťahovania fundamentov…'):
+            status=refresh_prices(store,covered_listings,limit=size)
+        st.session_state['market_refresh_status']=str(status)
+    if c2.button('Obnoviť expirované fundamenty',key='refresh_fundamentals'):
+        with st.spinner('Obnova iba fundamentov po expirácii alebo novom podaní…'):
+            due=due_fundamentals(store,covered_listings)
+            status=scan(due,cache,min(size,100)) if due else {'stopped':'Žiadne expirované fundamenty.'}
+        st.session_state['market_refresh_status']=str({k:v for k,v in status.items() if k!='rows'})
+    if c3.button('Skontrolovať nové SEC podania',key='check_filings'):
+        try:
+            with st.spinner('SEC denný index pre najnovší dokončený pracovný deň…'):status=check_filings(store)
+            st.session_state['market_refresh_status']=str(status)
+        except DataError as exc:st.warning(str(exc))
+    if st.session_state.get('market_refresh_status'):st.info(st.session_state['market_refresh_status'])
     rows=campaigns.rows(current['id'])
     counts=campaigns.counts(current['id'])
     report=audit(rows,listings['listings'])
@@ -58,7 +86,7 @@ def render_discovery():
     a.metric('Akcie v snímke univerza',counts['total'])
     b.metric('Unikátne spracované pokusy',report['attempted'])
     c.metric('Overená identita + finančný údaj',analyzed)
-    d.metric('Zoraditeľné pri načítaní',report['ranked_at_fetch'])
+    d.metric('Aktuálne porovnateľné',report['comparable'])
     st.progress(counts['done']/counts['total'] if counts['total'] else 0,text=f"Trvalý priechod #{current['id']}: {counts['done']}/{counts['total']} hotových, {counts['running']} rezervovaných, {counts['pending']} čaká")
     st.caption(f"Zoznam načítaný UTC: {listings['fetched_at']} · časy súborov NASDAQ Trader: {listings['file_times']}. Snímka je počas priechodu zmrazená; zmeny listingov sa preberú pri ďalšom úplnom priechode.")
     st.caption(f"Posledná dávka: {last.get('attempted',0)} pokusov, {last.get('network_loads',0)} volaní analyzátora (nie HTTP požiadaviek), {last.get('cache_hits',0)} z cache. Ukončenie UTC: {last.get('completed_at','N/A')}. Dokončené pokusy vrátane neúspechov sa v tomto priechode neopakujú; expirácia cache ich nemaže.")
@@ -70,14 +98,15 @@ def render_discovery():
     current_count=len(ranked_rows(rows,min_coverage=min_coverage))
     filtered_count=len(ranked_rows(rows,theme,undervalued,swing,min_coverage))
     st.subheader(f'TOP {len(chosen)} z {analyzed} finančných analýz ({len(rows)} pokusov)')
-    st.caption(f"{report['ranked_at_fetch']} akcií bolo zoraditeľných pri načítaní; aktuálne zoraditeľných pri danom pokrytí a limite 48 hodín je {current_count}, po filtroch {filtered_count}. Úplné univerzum má {counts['total']} symbolov. Nejde o TOP celého trhu ani o jednotnú trhovú snímku.")
+    st.caption(f"Platné fundamenty: {report['covered_fundamentals']}; aktuálne porovnateľné vrátane cien/valuácie: {report['comparable']}; pri zvolenom pokrytí {current_count}, po filtroch {filtered_count}. Úplné univerzum má {counts['total']} symbolov. Nejde o TOP celého trhu ani o jednotnú trhovú snímku.")
     st.warning('Dátové skreslenie: výber tickerov je nezávislý od dostupnosti dát, ale poradie zvýhodňuje firmy s úplnejšími výkazmi. Nezaradená firma nie je automaticky horšia investícia. N/A nenahrádzame nulou ani odhadom.')
-    columns={'symbol':'Ticker','name':'Spoločnosť','exchange':'Burza','score':'Discovery skóre','resilience':'Odolnosť','coverage':'Pokrytie %','growth':'Rast tržieb','forward_pe':'Forward P/E','fcf_margin':'FCF marža','net_debt_ebitda':'Čistý dlh/EBITDA','annual_period':'Ročné obdobie','annual_age_days':'Vek výkazov (dni)','fetched_at':'Načítané UTC','price_date':'Posledná cena UTC'}
+    columns={'symbol':'Ticker','name':'Spoločnosť','exchange':'Burza','score':'Discovery skóre','resilience':'Odolnosť','coverage':'Pokrytie %','growth':'Rast tržieb','forward_pe':'Forward P/E','fcf_margin':'FCF marža','net_debt_ebitda':'Čistý dlh/EBITDA','annual_period':'Ročné obdobie','annual_age_days':'Vek výkazov (dni)','fetched_at':'Fundamenty stiahnuté UTC','published_at':'Zverejnenie výkazu / SEC filing','fundamental_valid_until':'Platnosť fundamentov','price_asof':'Dátum zdrojovej ceny UTC','price_retrieved_at':'Ceny stiahnuté UTC','valuation_asof':'Valuácia k dátumu','price_source':'Zdroj ceny','technical_asof':'Technika z barov k dátumu','technical_retrieved_at':'Technika stiahnutá UTC'}
     if chosen:
-        df=pd.DataFrame([{**{columns[k]:r.get(k) for k in columns},'Finančné analýzy v priechode':analyzed,'Pokusy v priechode':len(rows),'Zoraditeľné pri načítaní':report['ranked_at_fetch'],'Univerzum':counts['total'],'Aktuálne zoraditeľné':current_count,'Po filtroch':filtered_count} for r in chosen])
+        df=pd.DataFrame([{**{columns[k]:r.get(k) for k in columns},'Finančné analýzy v priechode':analyzed,'Pokusy v priechode':len(rows),'Platné fundamenty':report['covered_fundamentals'],'Porovnateľné vrátane cien':report['comparable'],'Univerzum':counts['total'],'Aktuálne zoraditeľné':current_count,'Po filtroch':filtered_count} for r in chosen])
         st.dataframe(df.style.format(precision=3,na_rep='N/A'),hide_index=True)
         st.download_button('Stiahnuť TOP výsledky CSV',df.to_csv(index=False,na_rep='N/A').encode('utf-8-sig'),'discovery-top.csv','text/csv')
     else:st.info('V spracovanej vzorke zatiaľ nie je akcia s dostatkom dát, ktorá spĺňa filtre. Nejde o záver o celom trhu.')
+    st.caption('Fundamenty: platnosť najviac 90 dní od stiahnutia, skrátená očakávanými výsledkami; známe novšie SEC podanie ich zneplatní. Ceny a valuácia: najviac 7 dní od ceny, technika sa počíta z denných barov. Chýbajúci dátum zverejnenia ostáva N/A. Platnosť nie je garancia oneskorenia poskytovateľa.')
     with st.expander('Reprezentatívnosť, dostupnosť dát a čas pokrytia',expanded=True):
         st.write(f"Z {analyzed} finančných analýz bolo {report['excluded_analyzed']} nezoraditeľných; ďalších {report['without_financials']} pokusov nemalo overenú identitu s finančným vstupom.")
         if report['overlapping_reasons']:
@@ -86,7 +115,7 @@ def render_discovery():
             st.caption('Prvý blokujúci dôvod je iba technická priorita, nie jediná príčina. Tieto počty sa sčítajú na počet nezoraditeľných finančných analýz.')
             st.dataframe(pd.DataFrame([{'Prvý blokujúci dôvod':k,'Počet':v} for k,v in report['primary_reasons'].items()]),hide_index=True)
         if report['groups']:
-            st.dataframe(pd.DataFrame(report['groups']).rename(columns={'dimension':'Dimenzia','group':'Skupina','universe':'Univerzum (iba burza)','attempted':'Pokusy','analyzed':'Finančné analýzy','ranked':'Zoraditeľné pri načítaní','rank_rate':'Miera zaradenia','sample_share':'Podiel vo vzorke','universe_share':'Podiel v univerze'}).style.format(precision=3,na_rep='N/A'),hide_index=True)
+            st.dataframe(pd.DataFrame(report['groups']).rename(columns={'dimension':'Dimenzia','group':'Skupina','universe':'Univerzum (iba burza)','attempted':'Pokusy','analyzed':'Finančné analýzy','ranked':'Zoraditeľné podľa aktuálnych uložených dát','rank_rate':'Miera zaradenia','sample_share':'Podiel vo vzorke','universe_share':'Podiel v univerze'}).style.format(precision=3,na_rep='N/A'),hide_index=True)
         st.caption('Porovnávame burzu, sektor, dostupnú kapitalizáciu a zdroj. Sektor/kapitalizácia nie sú známe pre celé univerzum, preto nedokazujeme reprezentatívnosť týchto skupín. N/A skupiny ostávajú viditeľné. Rozdielne miery zaradenia ukazujú dátové skreslenie, nie príčinu alebo investičnú výkonnosť.')
         estimate=coverage_estimate(counts['total'],counts['done'])
         full_estimate=coverage_estimate(counts['total'])
@@ -94,7 +123,7 @@ def render_discovery():
         st.caption(f"Odhad aktívnej práce pri 5–20 sekundách na analyzátor je pre celé univerzum približne {full_estimate['active_hours_5_to_20s'][0]:.1f}–{full_estimate['active_hours_5_to_20s'][1]:.1f} hodín rozložených do dní; samotný interval 3 s dáva iba teoretickú dolnú hranicu {full_estimate['throttle_floor_hours']:.1f} hodiny. Jedna analýza môže vyvolať viac HTTP požiadaviek. Nie je to SLA ani horná hranica latencie. Bez plánovača musí obsluha spúšťať dávky; denný rozpočet nie je časová garancia. Priechod znamená pokus o každý symbol, nie úspešné fundamenty pre každý symbol.")
     if rows:
         with st.expander('Všetky pokusy, chýbajúce údaje a pôvod'):
-            st.dataframe(pd.DataFrame([{'Ticker':r['symbol'],'Identita overená':r['identity_verified'],'Skóre':r['score'],'Dôvod nezaradenia':'; '.join(r.get('rank_exclusions',[])),'Načítané UTC':r['fetched_at'],'Ročné obdobie':r['annual_period'],'Chýbajúce vstupy':', '.join(r['missing']),'AI infraštruktúra':r['themes']['AI infraštruktúra'],'Robotika':r['themes']['Robotika'],'Swing':r['swing'],'Upozornenia':' | '.join(r['warnings'])} for r in rows]).style.format(na_rep='N/A'),hide_index=True)
+            st.dataframe(pd.DataFrame([{'Ticker':r['symbol'],'Identita overená':r['identity_verified'],'Skóre':r['score'],'Dôvod nezaradenia':'; '.join(r.get('rank_exclusions',[])),'Načítané UTC':r['fetched_at'],'Ročné obdobie':r['annual_period'],'Chýbajúce vstupy':', '.join(r['missing']),'Chyba obnovy fundamentov':r.get('fundamental_error'),'Chyba obnovy cien':r.get('price_error'),'Fundamenty platné do':r.get('fundamental_valid_until'),'Posledná cena':r.get('price_asof'),'Kontrola SEC indexu':r.get('last_report_checked_at'),'AI infraštruktúra':r['themes']['AI infraštruktúra'],'Robotika':r['themes']['Robotika'],'Swing':r['swing'],'Upozornenia':' | '.join(r['warnings'])} for r in rows]).style.format(na_rep='N/A'),hide_index=True)
             symbol=st.selectbox('Pôvod údajov pre akciu',[r['symbol'] for r in rows],key='discovery_detail')
             row=next(r for r in rows if r['symbol']==symbol)
             st.json({'source':row['source'],'provenance':row['provenance'],'currency':row['currency']})

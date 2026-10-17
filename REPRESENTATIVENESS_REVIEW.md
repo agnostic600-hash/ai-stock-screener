@@ -1,5 +1,7 @@
 # PR #2 representativeness review — 2026-10-17
 
+Historical evidence. The later `STORAGE_AND_FRESHNESS.md` supersedes the combined cache / 48h fundamental expiry architecture described below.
+
 ## Selection
 The first sample was the first 100 of the stable SHA-256(`discovery-v1:` + symbol) permutation of the 5,370-symbol NASDAQ Trader snapshot. It was not alphabetical, handpicked, investment-filtered or formally randomized. Data availability is not an input to selection. This order is reproducible, not a guarantee of a representative market sample.
 
