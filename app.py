@@ -130,14 +130,17 @@ else:
         if s.provenance:
             st.dataframe(pd.DataFrame([{'Ukazovateľ': METRICS.get(k,k), 'Zdroj a obdobie': v} for k,v in s.provenance.items()]), hide_index=True)
         st.subheader('Financial Resilience Score (0–100)')
-        resilience_parts, resilience_score, confidence = evaluate_resilience(s.metrics)
+        st.caption('Ročné vstupy k '+s.resilience_period+'; mena '+(s.resilience_currency or 'N/A')+'. Horizont stresu: 24 mesiacov od dátumu súvahy, nie od dneška. Riedenie = zmena ročného váženého zriedeného počtu akcií; nejde o bodový počet akcií. EBITDA SEC je aproximácia prevádzkový zisk + D&A.')
+        resilience_parts, resilience_score, confidence = evaluate_resilience(s.resilience_inputs)
         r1, r2 = st.columns(2)
         r1.metric('Financial Resilience Score', 'N/A' if resilience_score is None else f'{resilience_score:.1f} / 100')
         r2.metric('Istota – pokrytie váh', f'{confidence} %')
+        if s.resilience_provenance:
+            st.dataframe(pd.DataFrame([{'Vstup':k,'Hodnota':s.resilience_inputs.get(k),'Pôvod a obdobie':v} for k,v in s.resilience_provenance.items()]).style.format({'Hodnota':'{:.4f}'},na_rep='N/A'),hide_index=True)
         st.caption('Predbežné skóre pri neúplných dátach. Istota meria dostupnosť údajov, nie pravdepodobnosť prežitia. Chýbajúce kategórie sa nenahrádzajú nulou; dostupné váhy sa normalizujú.')
         labels = {'fcf':'FCF · 25 %','debt':'Zadlženie · 20 %','growth_margins':'Rast a marže · 20 %','valuation':'Valuácia · 15 %','dilution':'Riedenie akcií · 10 %','ai_capex':'AI capex expozícia · 10 %'}
         st.dataframe(pd.DataFrame([{'Kategória':labels[k], 'Skóre':v} for k,v in resilience_parts.items()]).style.format({'Skóre':'{:.1f}'}, na_rep='N/A'), hide_index=True)
-        stress = stress_24m(s.metrics)
+        stress = stress_24m(s.resilience_inputs)
         st.subheader('Stresový scenár: tržby −20 %, horizont 24 mesiacov')
         if stress['status'] == 'N/A':
             st.info('Financovanie 24 mesiacov: N/A. Chýbajú alebo sú neplatné vstupy: '+', '.join(stress['missing']))

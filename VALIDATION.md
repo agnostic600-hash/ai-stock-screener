@@ -1,23 +1,15 @@
 # PR #1 validation — 2026-10-17
 
-## Automated tests (synthetic fixtures)
-Python 3.12, clean virtual environment installed from the committed requirements.txt. `python -m pytest -q`: **42 passed in 2.29s**. This includes the complete original suite, scoring, provider/SEC error and COHR identity regressions, Streamlit AppTest flows, and two new resilience UI tests (missing inputs and complete synthetic inputs with funding shortfall). Synthetic fixtures do not verify current financial facts.
+## Full automated suite (synthetic contracts)
+Python 3.12 clean virtual environment using committed requirements. Full `python -m pytest -q` passes **56 tests** including Streamlit AppTest, original screener/provider/SEC regressions, and annual resilience mapping contracts. Added tests cover annual alignment, missing currency, capex sign, missing/negative debt, explicit zero borrowings, missing second-year maturities, quarter/instant rejection for annual flows, prior-year share alignment, issuer mismatch, provider failure, newer-bundle replacement, end-to-end SEC-to-score/stress, and N/A UI. Fixtures are synthetic and are not current company facts.
 
-No failing test required a production-code fix. Added regression coverage and a GitHub Actions workflow to run the complete suite on push/PR.
+## Actual Streamlit startup
+The Streamlit server started; local `/` and `/_stcore/health` returned HTTP 200. AppTest exercises rendered UI logic. No graphical browser or real mobile layout inspection was performed.
 
-## Server startup
-`python -m streamlit run app.py --server.port 8501 --server.address 127.0.0.1 --browser.gatherUsageStats false` started successfully. Local `/_stcore/health` and `/` returned HTTP 200. AppTest executes the actual Streamlit application; a graphical browser/mobile layout inspection was not performed.
+## Separate live COHR observation (no mocks)
+A separate subprocess invoked `load_stock('COHR')` outside pytest. Both Yahoo Finance and SEC EDGAR responded. Identity: Coherent Corp.; annual end 2026-06-30, USD. FCF margin, net debt/EBITDA, revenue growth, operating margin, forward P/E and weighted diluted-share growth were populated with per-field provenance. Observed resilience score 51.9/100, coverage 90%; AI-capex dependence remained N/A. The model lacked a fully supported `debt_due_24m`, so financing status remained N/A. A second Yahoo annual statement check found the same revenue/cash and slightly different FCF than SEC, demonstrating why provider provenance remains visible. Sources are not independently audited and the probe does not guarantee ongoing access or cover every issuer.
 
-## Separate live probe — not mocked
-A separate Python subprocess called `data.load_stock('COHR')` without pytest, monkeypatching or fixtures, with a 45-second process deadline. It succeeded:
-- Company: Coherent Corp.
-- Source: Yahoo Finance + SEC EDGAR annual fallback.
-- Reported fiscal date: 2026-06-30.
-- Available metric keys: price, pe, forward_pe, revenue_growth, eps, earnings_growth, gross_margin, operating_margin, profit_margin, fcf, debt_equity, current_ratio, roic.
-- SEC supplied annual earnings_growth; this remains explicitly distinguished from Yahoo TTM metrics via provenance.
-- PEG remained N/A.
+## Scope and remaining limits
+All implemented standard-field mappings are wired. Missing proprietary AI-capex exposure and company-specific/narrative debt-maturity disclosures remain N/A by design. No total-debt substitution, fabricated maturity or zero-fill. See README for accounting proxies, annual-source dates, US-GAAP/European coverage, and stress assumptions. Historical annual cash is not current liquidity. The stress outcome covers debt principal plus short-term borrowings, not every lease, commitment or intra-period timing requirement.
 
-This establishes access and successful parsing at the time of this probe, not independent accuracy verification or a guarantee of ongoing provider availability. It does not verify every ticker.
-
-## Merge recommendation
-Keep PR #1 as draft / **not ready for full feature acceptance**. The code tested successfully, but provider mapping still only covers growth/margins and forward valuation for resilience (maximum 35% confidence). Verified FCF margin, net debt/EBITDA, dilution, AI-capex exposure and aligned 24-month stress inputs are not wired. Financing capacity correctly stays N/A. Do not present this draft as a completed resilience product. Complete and validate these data mappings before marking ready to merge. No merge was performed.
+The stable provider-neutral schema and pure scoring functions are separate from the Streamlit ticker input. Future all-market discovery is intentionally outside this PR. Existing PR #1 only; no merge performed. The bounded change is suitable for merge once the full hosted CI checks for its latest commit pass; it does not promise complete data for every company.

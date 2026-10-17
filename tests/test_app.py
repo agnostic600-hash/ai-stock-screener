@@ -79,7 +79,7 @@ def test_resilience_panel_missing_data_is_explicit():
 def test_resilience_panel_complete_inputs_and_shortfall():
     # Synthetic UI fixture; not a live COHR statement.
     app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / 'app.py'), default_timeout=15)
-    app.session_state['stocks'] = [Stock('UNIT', metrics=dict(
+    app.session_state['stocks'] = [Stock('UNIT', resilience_inputs=dict(
         fcf_margin=.2, net_debt_ebitda=0, revenue_growth=.2, operating_margin=.2,
         forward_pe=5, share_dilution=0, ai_capex_exposure=0,
         annual_revenue=1000, annual_fcf=50, annual_gross_margin=.5, cash=120, debt_due_24m=50))]
