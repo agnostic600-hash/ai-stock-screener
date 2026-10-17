@@ -46,6 +46,9 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
             info = asset.get_info()
             if not isinstance(info, dict):
                 raise DataError('Neplatná odpoveď Yahoo Finance.')
+            returned_symbol = info.get('symbol')
+            if returned_symbol and returned_symbol.upper() != symbol.upper():
+                raise DataError('Yahoo vrátilo údaje iného tickera.')
             if not any(number(info.get(k)) is not None for k in ('trailingPE', 'trailingEps', 'totalRevenue', 'freeCashflow')):
                 stock.warnings.append('Yahoo vrátilo iba čiastočnú odpoveď bez základných fundamentov; neznamená to neplatný ticker.')
             stock.name = info.get('longName') or info.get('shortName') or symbol
@@ -79,7 +82,7 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
                         stock.provenance[k] = 'SEC EDGAR – ročné obdobie do ' + fiscal_date
                         added.append(k)
                 if added:
-                    stock.name = stock.name or name
+                    stock.name = name if stock.name in ('', symbol) else stock.name
                     stock.financial_currency = stock.financial_currency or 'USD'
                     stock.source += ' + SEC EDGAR (ročná záloha)'
                     stock.warnings.append('SEC overilo ticker a doplnilo ročné údaje: ' + ', '.join(METRICS[k] for k in added) + '. Nie sú to TTM ani analytické odhady; podrobné obdobia sú v detaile.')
@@ -118,3 +121,4 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
     if missing:
         stock.warnings.append('N/A – zdroje neposkytli použiteľné údaje: ' + ', '.join(missing) + '. Podrobnosti o prístupe a pokrytí sú vyššie; chýbajúce odhady ani ceny sa nedopočítavajú.')
     return stock
+
