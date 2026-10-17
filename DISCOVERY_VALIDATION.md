@@ -1,5 +1,7 @@
 # Market Discovery MVP — validation 2026-10-17
 
+Historical initial-MVP baseline. The later representativeness review replaces browser/cycle offsets with durable whole-universe traversal, adds coverage diagnostics and a 48h current-ranking window. See `REPRESENTATIVENESS_REVIEW.md` for current behavior and additional test evidence.
+
 ## Automated contracts (not live financial facts)
 Complete original and new suite: `python -m pytest -q` — **71 passed**, including Streamlit AppTest. New tests cover official directory schemas/exclusions, NYSE N selection/class symbols, malformed/truncated files, deterministic sampling/offset, cache expiry and history round-trip, real-metric eligibility/missing-data exclusion, stale annuals, thematic/value/swing filters, cache/attempt/network counters, budget/cooldown behavior, loader failures and both UI modes. Synthetic fixtures are explicitly confined to tests.
 

@@ -9,6 +9,7 @@ from discovery_cache import pack, unpack
 from market_universe import fetch_universe
 from resilience import evaluate_resilience
 from resilience_data import INPUT_KEYS
+from discovery_audit import recent
 
 _GATE=threading.Lock()
 _LAST_START=0.0
@@ -79,7 +80,11 @@ def analyze(stock,listing):
     undervalued=(growth>=.15 and 0<pe<=25 and fcf>0) if all(v is not None for v in (growth,pe,fcf)) else None
     swing,price_date=swing_signal(stock.history,stock.volume_history)
     if stock.currency != 'USD':swing=None
-    return {'symbol':stock.ticker,'name':stock.name or listing['name'],'exchange':listing['exchange'],
+    cap=profile.get('marketCap') if stock.currency=='USD' else None
+    size_band='N/A'
+    if isinstance(cap,(int,float)) and math.isfinite(cap) and cap>0:
+        size_band='micro <300m USD' if cap<300e6 else 'small 300m–2b USD' if cap<2e9 else 'mid 2–10b USD' if cap<10e9 else 'large ≥10b USD'
+    return {'sector':stock.sector if profile else 'N/A','size_band':size_band,'market_cap':cap,'symbol':stock.ticker,'name':stock.name or listing['name'],'exchange':listing['exchange'],
             'identity_verified':stock.identity_verified,'rank_exclusions':exclusions,'score':score,'resilience':resilience,'coverage':coverage,
             'growth':growth,'forward_pe':pe,'fcf_margin':fcf,'net_debt_ebitda':m.get('net_debt_ebitda'),
             'themes':theme,'undervalued_growth':undervalued,'swing':swing,'price_date':price_date,
@@ -136,9 +141,13 @@ def scan(listings,cache,limit=10,excluded=(),loader=load_stock,progress=None,min
             'ranked':sum(r['score'] is not None for r in rows),'stopped':stopped,'completed_at':now_iso()}
 
 
-def top20(rows,theme='Všetky',undervalued=False,swing=False,min_coverage=70):
-    result=[r for r in rows if r['score'] is not None and r['coverage']>=min_coverage
+def ranked_rows(rows,theme='Všetky',undervalued=False,swing=False,min_coverage=70):
+    result=[r for r in rows if r['score'] is not None and recent(r) and r['coverage']>=min_coverage
             and (theme=='Všetky' or r['themes'].get(theme) is True)
             and (not undervalued or r['undervalued_growth'] is True)
             and (not swing or r['swing'] is True)]
-    return sorted(result,key=lambda r:(-r['score'],r['symbol']))[:20]
+    return sorted(result,key=lambda r:(-r['score'],r['symbol']))
+
+
+def top20(rows,theme='Všetky',undervalued=False,swing=False,min_coverage=70):
+    return ranked_rows(rows,theme,undervalued,swing,min_coverage)[:20]

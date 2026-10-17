@@ -56,7 +56,9 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
                 stock.warnings.append('Yahoo vrátilo iba čiastočnú odpoveď bez základných fundamentov; neznamená to neplatný ticker.')
             identity_verified = bool(returned_symbol)
             stock.identity_verified = identity_verified
-            stock.profile = {k:info.get(k) for k in ('industry','longBusinessSummary','quoteType','exchange','regularMarketTime')} if identity_verified else {}
+            stock.profile = {k:info.get(k) for k in ('industry','longBusinessSummary','quoteType','exchange','regularMarketTime','marketCap')} if identity_verified else {}
+            if stock.profile:
+                stock.profile['marketCap']=number(stock.profile.get('marketCap'))
             stock.name = info.get('longName') or info.get('shortName') or symbol
             stock.currency = info.get('currency', '')
             stock.financial_currency = info.get('financialCurrency', '')
