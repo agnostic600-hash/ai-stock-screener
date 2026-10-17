@@ -1,5 +1,6 @@
 """Dáta Yahoo Finance, voliteľne fundamenty Alpha Vantage."""
 import requests
+from datetime import datetime,timezone
 import pandas as pd
 import yfinance as yf
 from screener import Stock, number, METRICS
@@ -39,7 +40,7 @@ def compute_roic(income, balance):
     return ebit*(1-tax/pretax)/(sum(capital)/2), str(date.date())
 
 
-def load_stock(symbol, api_key='', provider='Yahoo Finance'):
+def load_stock(symbol, api_key='', provider='Yahoo Finance', include_prices=True):
     stock = Stock(symbol)
     asset = yf.Ticker(symbol)
     if provider == 'Yahoo Finance':
@@ -55,6 +56,14 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
             if not any(number(info.get(k)) is not None for k in ('trailingPE', 'trailingEps', 'totalRevenue', 'freeCashflow')):
                 stock.warnings.append('Yahoo vrátilo iba čiastočnú odpoveď bez základných fundamentov; neznamená to neplatný ticker.')
             identity_verified = bool(returned_symbol)
+            stock.identity_verified = identity_verified
+            stock.profile = {k:info.get(k) for k in ('industry','longBusinessSummary','quoteType','exchange','regularMarketTime','marketCap','forwardEps','earningsTimestamp','earningsTimestampStart','earningsTimestampEnd')} if identity_verified else {}
+            if stock.profile:
+                stock.profile['marketCap']=number(stock.profile.get('marketCap'))
+                stock.profile['forwardEps']=number(stock.profile.get('forwardEps'))
+                events=[number(info.get(k)) for k in ('earningsTimestamp','earningsTimestampStart','earningsTimestampEnd')]
+                future=[v for v in events if v is not None and datetime.now(timezone.utc).timestamp()<v<datetime.now(timezone.utc).timestamp()+366*86400]
+                if future:stock.next_report_at=datetime.fromtimestamp(min(future),timezone.utc).isoformat()
             stock.name = info.get('longName') or info.get('shortName') or symbol
             stock.currency = info.get('currency', '')
             stock.financial_currency = info.get('financialCurrency', '')
@@ -86,6 +95,8 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
         if any(stock.metrics.get(k) is None for k in supported) or any(stock.resilience_inputs.get(k) is None for k in ('fcf_margin','net_debt_ebitda','share_dilution','debt_due_24m')):
             try:
                 name, metrics, fiscal_date = load_sec(symbol)
+                stock.identity_verified = True
+                stock.sec_cik = metrics.get('_cik','')
                 if stock.financial_currency and stock.financial_currency != 'USD':
                     raise DataError('Mena výkazov Yahoo nie je USD; SEC USD údaje sa kvôli neporovnateľnosti nemiešajú.')
                 # Same-end, same-currency ratios can supplement one another; new periods replace the bundle.
@@ -100,18 +111,19 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
                             stock.resilience_provenance[k] = 'SEC annual '+fiscal_date+' USD'
                     annual_period = fiscal_date
                     stock.resilience_currency = 'USD'
+                    stock.financial_published_at = metrics.get('_published_at','')
                     if 'SEC EDGAR' not in stock.source:
                         stock.source += ' + SEC EDGAR (ročná záloha)'
                 added = []
                 for k,v in metrics.items():
-                    if k == '_resilience':
+                    if k.startswith('_'):
                         continue
                     if stock.metrics.get(k) is None and v is not None:
                         stock.metrics[k] = v
                         stock.provenance[k] = 'SEC EDGAR – ročné obdobie do ' + fiscal_date
                         added.append(k)
                 if added:
-                    stock.name = name if stock.name in ('', symbol) else stock.name
+                    stock.name = name if not identity_verified or stock.name in ('', symbol) else stock.name
                     stock.financial_currency = stock.financial_currency or 'USD'
                     if 'SEC EDGAR' not in stock.source:
                         stock.source += ' + SEC EDGAR (ročná záloha)'
@@ -146,14 +158,17 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
     if provider == 'Yahoo Finance' and identity_verified and stock.metrics.get('forward_pe') is not None:
         stock.resilience_inputs['forward_pe'] = stock.metrics['forward_pe']
         stock.resilience_provenance['forward_pe'] = 'Yahoo forward estimate; fetched '+stock.fetched
-    try:
-        history = asset.history(period='1y', auto_adjust=True, timeout=15)
-        if not history.empty:
-            stock.history = history['Close'].rename(symbol)
-        else:
-            stock.warnings.append('Cenová história nie je dostupná.')
-    except Exception as exc:
-        stock.warnings.append('Cenová história je N/A: ' + error_reason(exc))
+    if include_prices:
+        try:
+            history = asset.history(period='1y', auto_adjust=True, timeout=15)
+            if not history.empty:
+                stock.history = history['Close'].rename(symbol)
+                if 'Volume' in history:
+                    stock.volume_history = history['Volume'].rename(symbol)
+            else:
+                stock.warnings.append('Cenová história nie je dostupná.')
+        except Exception as exc:
+            stock.warnings.append('Cenová história je N/A: ' + error_reason(exc))
     missing = [label for k,label in METRICS.items() if stock.metrics.get(k) is None]
     if missing:
         stock.warnings.append('N/A – zdroje neposkytli použiteľné údaje: ' + ', '.join(missing) + '. Podrobnosti o prístupe a pokrytí sú vyššie; chýbajúce odhady ani ceny sa nedopočítavajú.')
@@ -161,3 +176,21 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
         stock.resilience_inputs.setdefault(key, None)
     return stock
 
+
+
+def load_fundamentals(symbol):
+    return load_stock(symbol,include_prices=False)
+
+
+def load_prices(symbol):
+    """Price-only request; never get_info or SEC company facts."""
+    history=yf.Ticker(symbol).history(period='1y',auto_adjust=True,timeout=15)
+    if history.empty or 'Close' not in history:raise DataError('Cenové údaje nie sú dostupné.')
+    result=Stock(symbol)
+    result.history=history['Close'].rename(symbol)
+    if 'Volume' in history:result.volume_history=history['Volume'].rename(symbol)
+    if 'Stock Splits' in history:
+        splits=history['Stock Splits'][history['Stock Splits']>0]
+        if not splits.empty:result.profile['last_split_at']=splits.index[-1].isoformat()
+    result.source='Yahoo Finance daily adjusted OHLCV'
+    return result
