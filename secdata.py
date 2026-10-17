@@ -6,6 +6,7 @@ from datetime import date
 from functools import lru_cache
 from providers import get_json, DataError
 from screener import number
+from resilience_data import annual_bundle
 
 
 def headers():
@@ -61,11 +62,14 @@ def parse_facts(payload):
         raise DataError('SEC nemá podporované ročné US-GAAP tržby v USD; ostatné hodnoty zostávajú N/A.')
     end = revenue['end']
     # Nevyberáme starší alternatívny účtovný tag po skončení dostupného obdobia.
-    def val(tags, unit='USD', period=end):
+    def val(tags, unit='USD', period=end, instant=False):
         record = annual_values(facts, tags, unit, period)
         if record is None:
             return None
-        if 'start' in record and record['start'] != revenue['start'] and period == end:
+        if instant:
+            if 'start' in record:
+                return None
+        elif record.get('start') != revenue['start'] and period == end:
             return None
         return number(record['val'])
     rev = number(revenue['val'])
@@ -75,8 +79,8 @@ def parse_facts(payload):
         metrics[key] = numerator/rev if numerator is not None and rev and rev > 0 else None
     cash = val(['NetCashProvidedByUsedInOperatingActivities'])
     capex = val(['PaymentsToAcquirePropertyPlantAndEquipment'])
-    metrics['fcf'] = cash-capex if cash is not None and capex is not None else None
-    assets, liabilities = val(['AssetsCurrent']), val(['LiabilitiesCurrent'])
+    metrics['fcf'] = cash-capex if cash is not None and capex is not None and capex>=0 else None
+    assets, liabilities = val(['AssetsCurrent'], instant=True), val(['LiabilitiesCurrent'], instant=True)
     metrics['current_ratio'] = assets/liabilities if assets is not None and liabilities is not None and liabilities > 0 else None
     previous_records=[]
     for tag in revenue_tags:
@@ -94,6 +98,31 @@ def parse_facts(payload):
         prev = number(previous['val']) if previous else None
         # Pri zápornom základe medziročný percentuálny rast nie je porovnateľný.
         metrics[key] = current/prev-1 if current is not None and prev is not None and prev > 0 else None
+    # All annual flow inputs use exactly the revenue start/end; balances use end.
+    current_shares = val(['WeightedAverageNumberOfDilutedSharesOutstanding'], 'shares')
+    previous_shares_record = annual_values(facts, ['WeightedAverageNumberOfDilutedSharesOutstanding'], 'shares', previous_end) if previous_end else None
+    previous_shares = None
+    prior_rev = annual_values(facts, revenue_tags, 'USD', previous_end) if previous_end else None
+    prior_revenue = number(prior_rev['val']) if prior_rev else None
+    if previous_shares_record and prior_rev and previous_shares_record.get('start') == prior_rev.get('start'):
+        previous_shares = number(previous_shares_record['val'])
+    # Do not treat one current portion as total debt. Require explicit total or both components.
+    debt = val(['LongTermDebtAndFinanceLeaseObligationsIncludingCurrentPortion'], instant=True)
+    short = val(['ShortTermBorrowings'], instant=True)
+    if debt is None:
+        long_debt, current_debt = val(['LongTermDebtNoncurrent'], instant=True), val(['LongTermDebtCurrent'], instant=True)
+        debt = long_debt+current_debt if long_debt is not None and current_debt is not None else None
+    debt = debt+short if debt is not None and short is not None else None
+    year1 = val(['LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths'], instant=True)
+    year2 = val(['LongTermDebtMaturitiesRepaymentsOfPrincipalInYearTwo'], instant=True)
+    due = year1+year2+short if all(v is not None and v>=0 for v in (year1,year2,short)) else None
+    # US-GAAP depreciation may include amortization; require an explicit combined tag.
+    depreciation = val(['DepreciationDepletionAndAmortization'])
+    ebit = val(['OperatingIncomeLoss'])
+    ebitda = ebit+depreciation if ebit is not None and depreciation is not None else None
+    bundle=annual_bundle(rev,metrics['fcf'],val(['GrossProfit']),ebit,
+        val(['CashAndCashEquivalentsAtCarryingValue'], instant=True),debt,ebitda,current_shares,previous_shares,prior_revenue,due)
+    metrics['_resilience'] = bundle
     return metrics, end
 
 

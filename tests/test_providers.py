@@ -152,3 +152,16 @@ def test_sec_usd_not_merged_with_other_reporting_currency(monkeypatch):
     stock=load_stock('TEST')
     assert stock.metrics['eps'] is None
     assert any('nemiešajú' in w for w in stock.warnings)
+
+
+
+def test_wrong_yahoo_symbol_is_not_used_for_cohr(monkeypatch):
+    class Asset:
+        def get_info(self): return {'symbol':'OTHER','trailingEps':999}
+        def history(self,**kwargs): return pd.DataFrame()
+    monkeypatch.setattr('data.yf.Ticker',lambda s:Asset())
+    monkeypatch.setattr('data.load_sec',lambda s:('Coherent Corp.',{'eps':2},'2025-06-30'))
+    stock=load_stock('COHR')
+    assert stock.metrics['eps']==2
+    assert stock.name=='Coherent Corp.'
+    assert 'SEC EDGAR' in stock.provenance['eps']

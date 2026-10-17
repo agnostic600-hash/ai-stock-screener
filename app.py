@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from data import load_stock
+from resilience import evaluate_resilience, stress_24m
 from screener import METRICS, PERCENT, evaluate, scenario, tickers
 
 st.set_page_config(page_title='AI Stock Screener', page_icon='📈', layout='wide')
@@ -128,6 +129,25 @@ else:
         st.write('Mena ceny: **'+(s.currency or 'N/A')+'**; mena finančných výkazov a EPS: **'+(s.financial_currency or 'N/A')+'**. Čiastky FCF sú v základných jednotkách meny výkazov.')
         if s.provenance:
             st.dataframe(pd.DataFrame([{'Ukazovateľ': METRICS.get(k,k), 'Zdroj a obdobie': v} for k,v in s.provenance.items()]), hide_index=True)
+        st.subheader('Financial Resilience Score (0–100)')
+        st.caption('Ročné vstupy k '+s.resilience_period+'; mena '+(s.resilience_currency or 'N/A')+'. Horizont stresu: 24 mesiacov od dátumu súvahy, nie od dneška. Riedenie = zmena ročného váženého zriedeného počtu akcií; nejde o bodový počet akcií. EBITDA SEC je aproximácia prevádzkový zisk + D&A.')
+        resilience_parts, resilience_score, confidence = evaluate_resilience(s.resilience_inputs)
+        r1, r2 = st.columns(2)
+        r1.metric('Financial Resilience Score', 'N/A' if resilience_score is None else f'{resilience_score:.1f} / 100')
+        r2.metric('Istota – pokrytie váh', f'{confidence} %')
+        if s.resilience_provenance:
+            st.dataframe(pd.DataFrame([{'Vstup':k,'Hodnota':s.resilience_inputs.get(k),'Pôvod a obdobie':v} for k,v in s.resilience_provenance.items()]).style.format({'Hodnota':'{:.4f}'},na_rep='N/A'),hide_index=True)
+        st.caption('Predbežné skóre pri neúplných dátach. Istota meria dostupnosť údajov, nie pravdepodobnosť prežitia. Chýbajúce kategórie sa nenahrádzajú nulou; dostupné váhy sa normalizujú.')
+        labels = {'fcf':'FCF · 25 %','debt':'Zadlženie · 20 %','growth_margins':'Rast a marže · 20 %','valuation':'Valuácia · 15 %','dilution':'Riedenie akcií · 10 %','ai_capex':'AI capex expozícia · 10 %'}
+        st.dataframe(pd.DataFrame([{'Kategória':labels[k], 'Skóre':v} for k,v in resilience_parts.items()]).style.format({'Skóre':'{:.1f}'}, na_rep='N/A'), hide_index=True)
+        stress = stress_24m(s.resilience_inputs)
+        st.subheader('Stresový scenár: tržby −20 %, horizont 24 mesiacov')
+        if stress['status'] == 'N/A':
+            st.info('Financovanie 24 mesiacov: N/A. Chýbajú alebo sú neplatné vstupy: '+', '.join(stress['missing']))
+        else:
+            st.write('Pokryté' if stress['status']=='covered' else 'Deficit financovania')
+            st.json(stress)
+        st.caption('Vyžaduje ročné tržby, FCF a hrubú maržu za rovnaké obdobie, hotovosť a dlh splatný do 24 mesiacov v rovnakej mene. Stratený hrubý zisk znižuje FCF; fixné náklady, capex a pracovný kapitál sú konštantné. Bez refinancovania. Koncová hotovosť negarantuje priebežnú likviditu. Riedenie, AI capex ani splatnosti dlhu sa neodhadujú.')
         st.subheader('Podmienený výhľad na 3 až 5 rokov')
         st.write('Scenár mechanicky zachováva posledný dostupný medziročný rast zisku a násobí ním dnešné EPS. Nie je to prognóza ceny ani odhad budúceho výnosu. Rast sa môže výrazne zmeniť.')
         projections = [{'Horizont':f'{year} rokov', 'Scenárové EPS':scenario(s, year)} for year in (3,4,5)]
@@ -150,3 +170,4 @@ Yahoo udáva dlh/vlastné imanie v percentách; aplikácia ho mení na pomer. Z�
 
 Alpha Vantage OVERVIEW neposkytuje všetky požadované ukazovatele; neznáme marže, FCF, zadlženie a ROIC zostávajú N/A. Európske pokrytie a symboly závisia od poskytovateľa. Pri limite alebo chybe API aplikácia zobrazí upozornenie. Údaje sa ukladajú do vyrovnávacej pamäte na 5 minút. API kľúč sa nezobrazuje ani nezapisuje do repozitára.
 ''')
+

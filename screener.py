@@ -46,6 +46,10 @@ class Stock:
     fetched: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     fiscal_date: str = 'N/A'
     provenance: dict = field(default_factory=dict)
+    resilience_inputs: dict = field(default_factory=dict)
+    resilience_provenance: dict = field(default_factory=dict)
+    resilience_period: str = 'N/A'
+    resilience_currency: str = ''
 
 
 def ramp(value, low, high, reverse=False):

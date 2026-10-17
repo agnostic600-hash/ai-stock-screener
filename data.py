@@ -5,6 +5,7 @@ import yfinance as yf
 from screener import Stock, number, METRICS
 from providers import error_reason, DataError
 from secdata import load_sec
+from resilience_data import yahoo_annual, INPUT_KEYS
 
 
 def statement_value(frame, row, column):
@@ -42,12 +43,18 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
     stock = Stock(symbol)
     asset = yf.Ticker(symbol)
     if provider == 'Yahoo Finance':
+        identity_verified = False
+        annual_period = None
         try:
             info = asset.get_info()
             if not isinstance(info, dict):
                 raise DataError('Neplatná odpoveď Yahoo Finance.')
+            returned_symbol = info.get('symbol')
+            if returned_symbol and returned_symbol.upper() != symbol.upper():
+                raise DataError('Yahoo vrátilo údaje iného tickera.')
             if not any(number(info.get(k)) is not None for k in ('trailingPE', 'trailingEps', 'totalRevenue', 'freeCashflow')):
                 stock.warnings.append('Yahoo vrátilo iba čiastočnú odpoveď bez základných fundamentov; neznamená to neplatný ticker.')
+            identity_verified = bool(returned_symbol)
             stock.name = info.get('longName') or info.get('shortName') or symbol
             stock.currency = info.get('currency', '')
             stock.financial_currency = info.get('financialCurrency', '')
@@ -65,24 +72,50 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
         except Exception as exc:
             stock.warnings.append('Yahoo Finance – fundamenty: ' + error_reason(exc))
         stock.provenance = {k: 'Yahoo Finance (obdobie podľa poskytovateľa)' for k,v in stock.metrics.items() if v is not None}
+        if identity_verified:
+            try:
+                values, period = yahoo_annual(asset.income_stmt, asset.cashflow, asset.balance_sheet, stock.financial_currency)
+                annual_period = period
+                stock.resilience_currency = stock.financial_currency
+                stock.resilience_inputs = values
+                stock.resilience_provenance = {k:'Yahoo annual '+str(period)+' '+stock.financial_currency for k,v in values.items() if v is not None}
+            except Exception as exc:
+                stock.warnings.append('Ročné resilience vstupy Yahoo: '+error_reason(exc))
         # SEC je nezávislá bezplatná záloha pre chýbajúce historické fundamenty.
         supported = ('eps','revenue_growth','earnings_growth','gross_margin','operating_margin','profit_margin','fcf','current_ratio')
-        if any(stock.metrics.get(k) is None for k in supported):
+        if any(stock.metrics.get(k) is None for k in supported) or any(stock.resilience_inputs.get(k) is None for k in ('fcf_margin','net_debt_ebitda','share_dilution','debt_due_24m')):
             try:
                 name, metrics, fiscal_date = load_sec(symbol)
                 if stock.financial_currency and stock.financial_currency != 'USD':
                     raise DataError('Mena výkazov Yahoo nie je USD; SEC USD údaje sa kvôli neporovnateľnosti nemiešajú.')
+                # Same-end, same-currency ratios can supplement one another; new periods replace the bundle.
+                bundle = metrics.get('_resilience', {})
+                if bundle and (annual_period is None or fiscal_date >= annual_period):
+                    if fiscal_date != annual_period or stock.financial_currency != 'USD':
+                        stock.resilience_inputs = {}
+                        stock.resilience_provenance = {}
+                    for k,v in bundle.items():
+                        if v is not None:
+                            stock.resilience_inputs[k] = v
+                            stock.resilience_provenance[k] = 'SEC annual '+fiscal_date+' USD'
+                    annual_period = fiscal_date
+                    stock.resilience_currency = 'USD'
+                    if 'SEC EDGAR' not in stock.source:
+                        stock.source += ' + SEC EDGAR (ročná záloha)'
                 added = []
                 for k,v in metrics.items():
+                    if k == '_resilience':
+                        continue
                     if stock.metrics.get(k) is None and v is not None:
                         stock.metrics[k] = v
                         stock.provenance[k] = 'SEC EDGAR – ročné obdobie do ' + fiscal_date
                         added.append(k)
                 if added:
-                    stock.name = stock.name or name
+                    stock.name = name if stock.name in ('', symbol) else stock.name
                     stock.financial_currency = stock.financial_currency or 'USD'
-                    stock.source += ' + SEC EDGAR (ročná záloha)'
-                    stock.warnings.append('SEC overilo ticker a doplnilo ročné údaje: ' + ', '.join(METRICS[k] for k in added) + '. Nie sú to TTM ani analytické odhady; podrobné obdobia sú v detaile.')
+                    if 'SEC EDGAR' not in stock.source:
+                        stock.source += ' + SEC EDGAR (ročná záloha)'
+                    stock.warnings.append('SEC overilo ticker a doplnilo ročné údaje: ' + ', '.join(METRICS.get(k,k) for k in added) + '. Nie sú to TTM ani analytické odhady; podrobné obdobia sú v detaile.')
             except DataError as exc:
                 stock.warnings.append('Záloha SEC EDGAR: ' + str(exc))
             except Exception:
@@ -106,6 +139,13 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
                 stock.metrics = {k:number(info.get(v)) for k,v in mapping.items()}
             except (requests.RequestException, ValueError) as exc:
                 stock.warnings.append('Alpha Vantage: ' + error_reason(exc))
+    if provider == 'Yahoo Finance' and annual_period:
+        stock.resilience_period = annual_period
+        stock.warnings.append('Resilience: ročné obdobie do '+annual_period+'; stresový horizont sa počíta od tohto dátumu, nie od dneška. AI capex expozícia vyžaduje osobitné overené zverejnenie. Vstupy chýbajúce v štandardných výkazoch sú N/A.')
+    # Forward P/E is an estimate, explicitly separate from annual historical inputs.
+    if provider == 'Yahoo Finance' and identity_verified and stock.metrics.get('forward_pe') is not None:
+        stock.resilience_inputs['forward_pe'] = stock.metrics['forward_pe']
+        stock.resilience_provenance['forward_pe'] = 'Yahoo forward estimate; fetched '+stock.fetched
     try:
         history = asset.history(period='1y', auto_adjust=True, timeout=15)
         if not history.empty:
@@ -117,4 +157,7 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
     missing = [label for k,label in METRICS.items() if stock.metrics.get(k) is None]
     if missing:
         stock.warnings.append('N/A – zdroje neposkytli použiteľné údaje: ' + ', '.join(missing) + '. Podrobnosti o prístupe a pokrytí sú vyššie; chýbajúce odhady ani ceny sa nedopočítavajú.')
+    for key in INPUT_KEYS:
+        stock.resilience_inputs.setdefault(key, None)
     return stock
+
