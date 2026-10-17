@@ -55,6 +55,8 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
             if not any(number(info.get(k)) is not None for k in ('trailingPE', 'trailingEps', 'totalRevenue', 'freeCashflow')):
                 stock.warnings.append('Yahoo vrátilo iba čiastočnú odpoveď bez základných fundamentov; neznamená to neplatný ticker.')
             identity_verified = bool(returned_symbol)
+            stock.identity_verified = identity_verified
+            stock.profile = {k:info.get(k) for k in ('industry','longBusinessSummary','quoteType','exchange','regularMarketTime')} if identity_verified else {}
             stock.name = info.get('longName') or info.get('shortName') or symbol
             stock.currency = info.get('currency', '')
             stock.financial_currency = info.get('financialCurrency', '')
@@ -86,6 +88,7 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
         if any(stock.metrics.get(k) is None for k in supported) or any(stock.resilience_inputs.get(k) is None for k in ('fcf_margin','net_debt_ebitda','share_dilution','debt_due_24m')):
             try:
                 name, metrics, fiscal_date = load_sec(symbol)
+                stock.identity_verified = True
                 if stock.financial_currency and stock.financial_currency != 'USD':
                     raise DataError('Mena výkazov Yahoo nie je USD; SEC USD údaje sa kvôli neporovnateľnosti nemiešajú.')
                 # Same-end, same-currency ratios can supplement one another; new periods replace the bundle.
@@ -111,7 +114,7 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
                         stock.provenance[k] = 'SEC EDGAR – ročné obdobie do ' + fiscal_date
                         added.append(k)
                 if added:
-                    stock.name = name if stock.name in ('', symbol) else stock.name
+                    stock.name = name if not identity_verified or stock.name in ('', symbol) else stock.name
                     stock.financial_currency = stock.financial_currency or 'USD'
                     if 'SEC EDGAR' not in stock.source:
                         stock.source += ' + SEC EDGAR (ročná záloha)'
@@ -150,6 +153,8 @@ def load_stock(symbol, api_key='', provider='Yahoo Finance'):
         history = asset.history(period='1y', auto_adjust=True, timeout=15)
         if not history.empty:
             stock.history = history['Close'].rename(symbol)
+            if 'Volume' in history:
+                stock.volume_history = history['Volume'].rename(symbol)
         else:
             stock.warnings.append('Cenová história nie je dostupná.')
     except Exception as exc:

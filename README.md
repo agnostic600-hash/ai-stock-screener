@@ -100,3 +100,38 @@ The SEC debt-due mapping requires explicit next-12-month principal maturities, y
 AI-capex revenue exposure is not a standardized Yahoo/SEC field; it remains N/A without a separate verified disclosure. Weighted diluted-share growth is a dilution proxy affected by convertible instruments and EPS dilution rules; it is not a direct measurement of share issuance. Nonpositive EBITDA cannot yield net-debt/EBITDA. SEC IFRS/20-F and many European issuers are unsupported by this US-GAAP annual parser; Yahoo may supply annual figures instead. Missing provider values, mismatched identity/periods and missing currency fail closed. Period age is shown, not silently rolled forward. No live-source availability or independent financial audit is guaranteed.
 
 See `VALIDATION.md` for separate synthetic tests, server checks and live COHR observations.
+
+## FÁZA 2 — Market Discovery MVP
+Select **Market Discovery** in the sidebar; individual-stock analysis stays in its original mode. Click **Vyhľadať príležitosti / ďalšia dávka**; no ticker entry is needed. Default batch 10, configurable up to 100. Further batches skip the current cycle's symbols, capped at 100 unique attempts per cycle. **Nový cyklus / ďalšia vzorka** advances the deterministic universe offset while retaining cache and the daily network budget. This is user-triggered discovery, not a continuously running background scheduler.
+
+### Real data sources
+- NASDAQ Trader Symbol Directory: `https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt` and `https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt`. Both must parse with their expected pipe-delimited schema and file-creation footer. Only NASDAQ plus NYSE exchange code N; excludes ETF/test/NextShares and preferred/warrant/right/unit/debt/fund terms in names. ADRs are allowed; name classification is imperfect and two share classes count as two securities. No seed ticker list or manufactured results.
+- Existing Yahoo/SEC loader supplies real annual fundamentals, company identity, description/industry and adjusted daily close/volume. SEC exact ticker/CIK checks remain; a missing or mismatching Yahoo symbol cannot supply profile or resilience statement inputs. Yahoo non-equity quote types cannot enter the ranking. Directory membership does not guarantee a security has all required fundamentals.
+- `market_universe.py` owns universe ingestion; `discovery.py` owns sample selection, ranking and filters; provider-neutral `Stock` remains shared with the original analysis. Universe discovery does not require changing the scorer or data provider. A paid bulk data adapter or scheduler can replace the bounded loader loop later.
+
+### Ranking and filters
+All scores are documented heuristics computed from source metrics, not generative AI or synthetic company values. Discovery score is the equally weighted average of growth/margins, valuation, FCF, debt and Financial Resilience Score. The first four use existing resilience component scales; reusing them inside the resilience score deliberately increases their effective influence. Every primary component must exist, identity must be verified, resilience coverage must be ≥70%, annual end must be known, not in the future and no older than 550 days. Otherwise discovery score is N/A and the security is shown among attempts, not assigned zero or silently replaced by a different company. The UI lists exclusion reasons and missing fields. TOP 20 contains at most 20 **eligible analyzed securities**, after filters; it is never called a scan of the entire market.
+
+Selection order is SHA-256(`discovery-v1:` + symbol), rotated by cycle offset. It is deterministic and independent of scores, without market-cap or liquidity preselection; it can contain small/illiquid or sector-specific businesses unsuitable for generic ratios. This MVP is a sample, not a representative performance study or a marketwide best-picks claim.
+
+Filters:
+- AI infrastructure / robotics: case-insensitive keyword matches in verified Yahoo industry/business description. Displayed as heuristic themes, not proven AI revenue exposure; no description means N/A. Full keyword rules are in `discovery.py`.
+- Undervalued growth: annual revenue growth ≥15%, 0<forward P/E≤25, FCF margin>0. This does not calculate fair value.
+- Swing: adjusted close and 20-close average above 50-close average, five-close return between −8% and 0%, last volume ≥1.2×20-day volume, average dollar volume ≥USD 1m. Requires 55 positive closes, 20 aligned volumes, USD price currency and latest price ≤7 days old. No missing volumes or prices are invented; this is not a trading recommendation.
+
+### Counts, cache and quotas
+`Cache` stores only JSON in SQLite at `DISCOVERY_CACHE_PATH` (default `.cache/discovery.sqlite3`, ignored by Git). Directory and usable stock payload TTL: 24 h; unusable attempts: 15 min. Cached payloads retain original fetched time, fiscal end, missing inputs and per-field provenance; cache hits do not masquerade as a new fetch. Price history retains the last trading date. A user-triggered new cycle does not wipe cache. Cache storage is deployment-local; use a persistent writable volume to retain it across restarts. Do not place secrets in it.
+
+One process-wide gate serializes discovery network analyses and spaces their starts by at least 3 seconds. There is a persisted budget of 100 **new analyzer invocations** per UTC day per cache, not 100 HTTP requests: one analyzer may make multiple Yahoo/SEC requests. Existing SEC limiter remains at max 4 request starts/s. On a freshly encountered 429 or 401/403 warning, stop the batch and persist a 15-minute cooldown. Cached older warnings do not repeatedly extend it. Cache hits still work during cooldown/budget exhaustion. Yahoo does not offer a guaranteed public quota/SLA; these are conservative controls, not a promise of free marketwide coverage. Multiple processes/replicas with separate locks/caches need a centralized distributed limiter before scaling. No retry loop bypasses provider blocks.
+
+Counters distinguish eligible directory size, unique attempts in the session cycle, identity+at-least-one-financial-input analyses, rankable securities, and per-batch network analyzer calls/cache hits. Failed or partial results remain visible. Source file-creation strings and fetched UTC timestamps are both displayed. Stale rows in an open session do not auto-refresh on every widget change; start a new cycle after cache expiry.
+
+### Run and validate
+```
+python -m pip install -r requirements.txt
+streamlit run app.py
+python discovery_cli.py --limit 10 --output discovery-result.json
+python discovery_cli.py --limit 10 --offset 100 --output discovery-result.json
+python -m pytest -q
+```
+CLI is an actual network/cache run, never fixtures; its output path is ignored by Git by default. Tests inject synthetic provider responses and are explicitly not live-data evidence. Live run observations are recorded separately in `DISCOVERY_VALIDATION.md`. No secret/API key is needed for these public sources. Do not promise complete live fundamentals, FCF, maturity or AI-capex coverage; original N/A and accounting/stress limitations still apply.

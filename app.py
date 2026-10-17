@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from data import load_stock
+from discovery_ui import render_discovery
 from resilience import evaluate_resilience, stress_24m
 from screener import METRICS, PERCENT, evaluate, scenario, tickers
 
@@ -26,6 +27,11 @@ def secret_key():
 def cached_stock(symbol, provider, api_key):
     return load_stock(symbol, api_key, provider)
 
+
+mode=st.sidebar.radio('Pracovný režim',['Analýza jednotlivých akcií','Market Discovery'],key='workspace_mode')
+if mode=='Market Discovery':
+    render_discovery()
+    st.stop()
 
 with st.sidebar:
     st.header('Výber akcií')

@@ -41,6 +41,7 @@ class Stock:
     sector: str = 'N/A'
     metrics: dict = field(default_factory=dict)
     history: object = None
+    volume_history: object = None
     warnings: list = field(default_factory=list)
     source: str = 'Yahoo Finance'
     fetched: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -50,6 +51,8 @@ class Stock:
     resilience_provenance: dict = field(default_factory=dict)
     resilience_period: str = 'N/A'
     resilience_currency: str = ''
+    profile: dict = field(default_factory=dict)
+    identity_verified: bool = False
 
 
 def ramp(value, low, high, reverse=False):
